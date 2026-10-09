@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "orchestratore-llm"
+version = "0.1.0"
+description = "Orchestratore asincrono resiliente per chiamate batch a provider LLM con rate limiting, retry esponenziale e metriche"
+authors = ["Engineering Team <engineering@company.local>"]
+readme = "README.md"
+packages = [{include = "orchestratore_llm", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.4.0"
+pytest-asyncio = ">=0.21.0"
+
+[tool.poetry.scripts]
+orchestratore-llm = "orchestratore_llm.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["src/orchestratore_llm/tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+pythonpath = ["src"]

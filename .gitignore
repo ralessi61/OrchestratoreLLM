@@ -1,0 +1,17 @@
+# Esclusi dal repository per ora
+docs/
+examples/
+README.md
+
+# Artefatti generati
+output/
+report.json
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.idea/
+.vscode/
