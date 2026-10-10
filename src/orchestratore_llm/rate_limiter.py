@@ -47,7 +47,8 @@ class TokenBucketRateLimiter(BaseRateLimiter):
         self.capacity = float(capacity) if capacity is not None else float(rate)
         self.tokens = self.capacity
         self.last_update = time.monotonic()
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock() 
+        # Lock() crea un lock asincrono, cioè un blocco che permette a una sola coroutine alla volta di entrare in una certa sezione di codice.
 
     async def acquire(self, tokens: int = 1) -> float:
         """Attende fino a quando non sono disponibili i token richiesti.

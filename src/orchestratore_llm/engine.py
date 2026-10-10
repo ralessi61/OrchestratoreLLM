@@ -96,7 +96,8 @@ class LLMOrchestrator:
         # 3. Callback interna per tracciamento dei retry
         def _on_retry(attempt_num: int, exc: Exception, delay_sec: float) -> None:
             nonlocal total_attempts
-            total_attempts = attempt_num
+            # attempt_num conta i retry già avviati; includi anche il primo tentativo.
+            total_attempts = attempt_num + 1
             logger.warning(
                 f"Retry richiesta {request.request_id} (doc={request.document_id}) - "
                 f"Tentativo #{attempt_num} a causa di {exc.__class__.__name__}: {exc}. "

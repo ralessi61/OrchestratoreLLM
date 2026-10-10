@@ -1,1 +1,0 @@
-"""Inizializzazione test suite."""

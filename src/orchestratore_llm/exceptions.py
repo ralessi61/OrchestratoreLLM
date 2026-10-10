@@ -71,7 +71,7 @@ class TransientError(OrchestratorError):
 
 
 class RateLimitError(TransientError):
-    """Raggiungimento dei limiti di frequenza (RPM o TPM) del provider (es. HTTP 429)."""
+    """Raggiungimento dei limiti di frequenza (Requests Per Minute o Tokens Per Minute:) del provider (es. HTTP 429)."""
 
     def __init__(
         self,

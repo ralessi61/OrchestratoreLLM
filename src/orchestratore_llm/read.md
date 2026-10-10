@@ -9,7 +9,7 @@ L'implementazione originale si basava su un ciclo sequenziale bloccante: ogni do
 - **Vulnerabilità ai Rate Limit (HTTP 429):** Il primo rifiuto da parte del provider causava un'eccezione non gestita che arrestava l'intero processo.
 - **Assenza di persistenza dello stato:** Il crash comportava la perdita immediata di tutte le elaborazioni pregresse, costringendo a riavvii manuali da zero con costi API raddoppiati.
 ---
-### 2. Razionale della Scelta: Perché `asyncio`
+### 2. Perché `asyncio`
 La natura dell'elaborazione è **I/O-bound**: oltre il 99% del tempo viene speso in attesa di rete (latenza TCP, coda remota e generazione token sul cluster del provider). La CPU locale resta inattiva.
 - **Scarto di `multiprocessing`:** Spostare chiamate HTTP su processi figli comporterebbe un overhead insostenibile (30–50 MB di RAM per worker, costi di spawn/fork del processo e pesante serializzazione IPC via `pickle`).
 - **Scarto di `threading`:** I thread del sistema operativo consumano circa 8 MB di stack ciascuno, generano contesa sul GIL e richiedono lock complessi sulle strutture dati condivise.
@@ -22,13 +22,18 @@ La natura dell'elaborazione è **I/O-bound**: oltre il 99% del tempo viene speso
                                                                          [Checkpoint JSONL Streaming]
 ```
 1. **Preservazione dell'Ordine (Allineamento 1:1):** Per evitare il disallineamento dovuto a tempi di risposta eterogenei, l'orchestratore pre-alloca una lista posizionale di dimensione N. Ogni coroutine riceve l'indice originario della richiesta e deposita il risultato nella posizione esatta di partenza. La risposta espone inoltre una mappa indicizzata `results_by_id` per lookup O(1).
+
 2. **Tassonomia Rigorosa delle Eccezioni:**
    - *Errori Permanenti (`PermanentError`: 400, 401, 403, 404, payload non valido):* Esecuzione interrotta all'istante (*Fail-Fast*), evitando inutili consumi di quota.
    - *Errori Transitori (`TransientError`: 429, 503, timeout di rete):* Intercettati e instradati al meccanismo di retry.
+
 3. **Retry con Exponential Backoff, Full Jitter e `Retry-After`:** L'intervallo cresce esponenzialmente ($t = 2^{\text{attempt}}$) con fattore randomico (*Full Jitter*) per evitare che richieste fallite si riallineino saturando nuovamente il server (fenomeno del *Thundering Herd*). Se la risposta include l'header `Retry-After`, questo ha precedenza sul calcolo matematico.
 Thundering Herd: Il fenomeno in cui molteplici client falliscono simultaneamente e tentano di ritentare nello stesso istante, causando un sovraccarico del server e ulteriori fallimenti.
+
 4. **Throttling a Due Livelli:** Un `asyncio.Semaphore` limita le connessioni simultanee attive (es. 15), mentre un `TokenBucketRateLimiter` gestisce il volume su base temporale (es. 300 RPM) consentendo piccoli burst senza violare le quote del provider.
+
 5. **Tolleranza ai Guasti e Checkpointing Streaming:** I singoli fallimenti non interrompono l'elaborazione degli altri task. Ciascun completamento invoca una callback atomica in append su file `checkpoints.jsonl`: in caso di spegnimento forzato dell'infrastruttura, il lavoro svolto è preservato su disco fino all'ultimo documento completato.
+
 6. **Disaccoppiamento Provider (Open/Closed Principle):** L'orchestratore dipende unicamente dal contratto astratto `BaseLLMProvider`. L'introduzione di nuovi endpoint (OpenAI, Anthropic, modelli locali Ollama/vLLM) avviene registrando la classe nel `ProviderRegistry`, senza toccare una singola riga dell'engine.
 ---
 ### 4. Esiti di Collaudo e Benchmark

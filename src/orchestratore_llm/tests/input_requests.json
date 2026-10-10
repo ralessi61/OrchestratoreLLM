@@ -1,0 +1,8 @@
+[
+  {
+    "prompt": "Riassumi il documento di esempio in tre punti.",
+    "request_id": "EXAMPLE-SUMMARY-001",
+    "document_id": "EXAMPLE-DOC-001",
+    "task_type": "summary"
+  }
+]

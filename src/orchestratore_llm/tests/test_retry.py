@@ -28,6 +28,8 @@ class TestRetry(unittest.IsolatedAsyncioTestCase):
         calls = 0
 
         async def flaky_operation():
+            # senza riga sotto, Python gestisce calls come variabile locale perchè si usa calls += 1
+            # quindi a prima call si ha UnbouldLocalError
             nonlocal calls
             calls += 1
             if calls < 3:
