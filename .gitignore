@@ -1,10 +1,8 @@
 # Esclusi dal repository per ora
-docs/
-examples/
 README.md
 
-# Artefatti generati
-output/
+# Artefatti generati (una cartella per notte: output_AAAA-MM-GG)
+output_*/
 report.json
 .pytest_cache/
 __pycache__/
