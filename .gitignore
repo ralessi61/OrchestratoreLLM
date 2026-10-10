@@ -1,6 +1,4 @@
 # Esclusi dal repository per ora
-README.md
-
 # Artefatti generati (una cartella per notte: output_AAAA-MM-GG)
 output_*/
 report.json
