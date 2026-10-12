@@ -8,6 +8,7 @@ import statistics
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
+from .concurrency import AsyncioStrategy, ConcurrencyStrategy
 from .exceptions import OrchestratorError, PermanentError, TransientError
 from .models import (
     BatchMetrics,
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 class LLMOrchestrator:
     """Orchestratore di chiamate a modelli linguistici con tolleranza d'errore.
     
-    Gestisce la concorrenza con semafori asincroni, impone limiti di frequenza,
+    Mette un tetto alle chiamate in volo, impone limiti di frequenza,
     applica retry adattivo ed elabora lotti massivi preservando l'ordine
     e la corrispondenza con le richieste d'origine.
     """
@@ -40,6 +41,7 @@ class LLMOrchestrator:
         rate_limiter: Optional[BaseRateLimiter] = None,
         retry_policy: Optional[RetryPolicy] = None,
         checkpoint_callback: Optional[Callable[[TaskExecutionResult], Union[None, Awaitable[None]]]] = None,
+        strategy: Optional[ConcurrencyStrategy] = None,
     ) -> None:
         """Inizializza l'orchestratore.
         
@@ -50,12 +52,15 @@ class LLMOrchestrator:
             retry_policy: Regole di retry e backoff per errori transitori.
             checkpoint_callback: Funzione invocata non appena un task termina,
                                 utile per persistere su disco/database i singoli avanzamenti.
+            strategy: AsyncioStrategy o ThreadingStrategy. Se omessa, asyncio
+                      con il tetto max_concurrency.
         """
         if max_concurrency <= 0:
             raise ValueError("max_concurrency deve essere strettamente positivo")
 
         self.registry = registry or create_default_registry()
-        self.max_concurrency = max_concurrency
+        self.strategy = strategy or AsyncioStrategy(max_concurrency)
+        self.max_concurrency = self.strategy.max_concurrency
         self.rate_limiter = rate_limiter
         self.retry_policy = retry_policy or RetryPolicy()
         self.checkpoint_callback = checkpoint_callback
@@ -199,23 +204,16 @@ class LLMOrchestrator:
 
         batch_start = time.monotonic()
         total_count = len(requests)
-        semaphore = asyncio.Semaphore(self.max_concurrency)
 
-        # Array pre-dimensionato per garantire l'esatto posizionamento ordinato
+        # La posizione è quella di partenza. Si riempie quando la chiamata finisce,
+        # non quando sono finite tutte.
         ordered_results: List[Optional[TaskExecutionResult]] = [None] * total_count
 
-        async def _worker(index: int, req: LLMRequest) -> None:
-            async with semaphore:
-                res = await self.execute_request(req)
-                ordered_results[index] = res
+        def _store(index: int, result: TaskExecutionResult) -> None:
+            ordered_results[index] = result
 
-        # Avvio parallelo di tutte le coroutine
-        tasks = [
-            asyncio.create_task(_worker(idx, req))
-            for idx, req in enumerate(requests)
-        ]
-
-        await asyncio.gather(*tasks)
+        jobs = [(lambda req=req: self.execute_request(req)) for req in requests]
+        await self.strategy.run(jobs, _store)
 
         wall_clock = time.monotonic() - batch_start
         final_results = [r for r in ordered_results if r is not None]

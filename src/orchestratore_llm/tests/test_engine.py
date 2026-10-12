@@ -2,6 +2,7 @@
 
 import asyncio
 import unittest
+from orchestratore_llm.concurrency import AsyncioStrategy, ThreadingStrategy
 from orchestratore_llm.engine import LLMOrchestrator
 from orchestratore_llm.exceptions import InvalidRequestError
 from orchestratore_llm.models import (
@@ -142,6 +143,87 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(completed_ids), 4)
         self.assertEqual(set(completed_ids), {"ID-0", "ID-1", "ID-2", "ID-3"})
+
+    async def test_checkpoint_follows_completion_not_input_order(self):
+        seen = []
+
+        class VariableLatencyProvider(SimulatedLLMProvider):
+            async def complete(self, request: LLMRequest):
+                await asyncio.sleep(float(request.metadata["delay"]))
+                return await super().complete(request)
+
+        reg = ProviderRegistry()
+        reg.register(
+            VariableLatencyProvider(name="var", latency_range=(0.0, 0.0)),
+            set_as_default=True,
+        )
+        orchestrator = LLMOrchestrator(
+            registry=reg,
+            max_concurrency=4,
+            checkpoint_callback=lambda result: seen.append(result.request_id),
+        )
+        requests = [
+            LLMRequest(prompt=f"p {i}", request_id=f"REQ-{i}", metadata={"delay": (4 - i) * 0.05})
+            for i in range(4)
+        ]
+
+        batch = await orchestrator.execute_batch(requests)
+
+        self.assertEqual(seen[0], "REQ-3")
+        self.assertEqual(seen[-1], "REQ-0")
+        self.assertEqual([res.request.request_id for res in batch.results], [f"REQ-{i}" for i in range(4)])
+
+    async def test_cancel_does_not_wait_for_the_slow_ones(self):
+        started = 0
+        finished = 0
+
+        class SlowProvider(SimulatedLLMProvider):
+            async def complete(self, request: LLMRequest):
+                nonlocal started, finished
+                started += 1
+                await asyncio.sleep(0.8)
+                finished += 1
+                return await super().complete(request)
+
+        reg = ProviderRegistry()
+        reg.register(SlowProvider(name="slow", latency_range=(0.0, 0.0)), set_as_default=True)
+        orchestrator = LLMOrchestrator(registry=reg, max_concurrency=2)
+        requests = [LLMRequest(prompt=f"p {i}", request_id=f"S-{i}") for i in range(6)]
+
+        batch_task = asyncio.create_task(orchestrator.execute_batch(requests))
+        await asyncio.sleep(0.1)
+        batch_task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await batch_task
+
+        self.assertGreaterEqual(started, 1)
+        self.assertEqual(finished, 0)
+
+    async def test_threading_strategy_keeps_order_on_the_same_batch(self):
+        class VariableLatencyProvider(SimulatedLLMProvider):
+            async def complete(self, request: LLMRequest):
+                await asyncio.sleep(float(request.metadata.get("delay", 0.01)))
+                return await super().complete(request)
+
+        requests = [
+            LLMRequest(prompt=f"Prompt {i}", request_id=f"REQ-{i}", metadata={"delay": (5 - i) * 0.02})
+            for i in range(5)
+        ]
+
+        outcomes = []
+        for strategy in (AsyncioStrategy(4), ThreadingStrategy(4)):
+            reg = ProviderRegistry()
+            reg.register(
+                VariableLatencyProvider(name="var-lat", latency_range=(0.0, 0.0)),
+                set_as_default=True,
+            )
+            orchestrator = LLMOrchestrator(registry=reg, strategy=strategy)
+            batch = await orchestrator.execute_batch(requests)
+            outcomes.append([res.request.request_id for res in batch.results])
+            self.assertTrue(all(res.is_success for res in batch.results))
+
+        self.assertEqual(outcomes[0], outcomes[1])
+        self.assertEqual(outcomes[0], [f"REQ-{i}" for i in range(5)])
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ politiche di retry con Full Jitter, classificazione degli errori (transienti vs 
 e tracciamento metriche.
 """
 
+from .concurrency import AsyncioStrategy, ThreadingStrategy
 from .engine import LLMOrchestrator
 from .exceptions import (
     AuthenticationError,
@@ -42,6 +43,8 @@ __version__ = "0.1.0"
 __all__ = [
     # Motore principale
     "LLMOrchestrator",
+    "AsyncioStrategy",
+    "ThreadingStrategy",
     # Modelli di dati
     "LLMRequest",
     "LLMResponse",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -47,8 +48,8 @@ class TokenBucketRateLimiter(BaseRateLimiter):
         self.capacity = float(capacity) if capacity is not None else float(rate)
         self.tokens = self.capacity
         self.last_update = time.monotonic()
-        self._lock = asyncio.Lock() 
-        # Lock() crea un lock asincrono, cioè un blocco che permette a una sola coroutine alla volta di entrare in una certa sezione di codice.
+        self._lock = threading.Lock()
+        # threading, non asyncio: altrimenti il bucket non si può condividere fra i thread.
 
     async def acquire(self, tokens: int = 1) -> float:
         """Attende fino a quando non sono disponibili i token richiesti.
@@ -62,7 +63,7 @@ class TokenBucketRateLimiter(BaseRateLimiter):
         total_waited = 0.0
 
         while True:
-            async with self._lock:
+            with self._lock:
                 now = time.monotonic()
                 elapsed = now - self.last_update
                 self.last_update = now
@@ -93,13 +94,13 @@ class SlidingWindowRateLimiter(BaseRateLimiter):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.timestamps: list[float] = []
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def acquire(self, tokens: int = 1) -> float:
         total_waited = 0.0
 
         while True:
-            async with self._lock:
+            with self._lock:
                 now = time.monotonic()
                 boundary = now - self.window_seconds
 

@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -46,12 +47,12 @@ class CheckpointManager:
     def __init__(self, checkpoint_file: Path) -> None:
         self.checkpoint_file = checkpoint_file
         self.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def save_checkpoint(self, result: TaskExecutionResult) -> None:
-        """Accoda atomicamente l'esito della chiamata sul file JSONL."""
+        """Accoda l'esito della chiamata sul file JSONL."""
         line = json.dumps(result.to_dict(), ensure_ascii=False) + "\n"
-        async with self._lock:
+        with self._lock:
             with open(self.checkpoint_file, "a", encoding="utf-8") as f:
                 f.write(line)
 

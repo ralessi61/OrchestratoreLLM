@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -46,6 +47,7 @@ class SimulatedLLMProvider(BaseLLMProvider):
         self.simulated_retry_after = simulated_retry_after
         self.fail_first_n_attempts = fail_first_n_attempts or {}
         self._request_attempts: Dict[str, int] = {}
+        self._attempts_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -69,8 +71,9 @@ class SimulatedLLMProvider(BaseLLMProvider):
 
         # Tracciamento dei tentativi per specifica richiesta (per test di recovery controllato)
         req_id = request.request_id
-        current_attempt = self._request_attempts.get(req_id, 0) + 1
-        self._request_attempts[req_id] = current_attempt
+        with self._attempts_lock:
+            current_attempt = self._request_attempts.get(req_id, 0) + 1
+            self._request_attempts[req_id] = current_attempt
 
         # Simulazione latenza di rete e inferenza
         min_lat, max_lat = self.latency_range
