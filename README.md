@@ -13,6 +13,22 @@ Progettata specificamente per pipeline batch notturne che richiedono:
 - **Logging strutturato** (JSON o console a colori) e metriche di esecuzione dettagliate (tempi, token, throughput);
 - **Supporto nativo a Poetry** per la gestione del package, delle dipendenze e dell'ambiente virtuale.
 
+## Concorrenza, GIL e processi
+
+Il numero di chiamate in esecuzione lo decide un `asyncio.Semaphore` (`max_concurrency`): `complete` parte solo se c'è un posto libero. Le `sleep` che si incontrano nel codice sono la latenza finta del simulatore, il backoff del retry e l'attesa del rate limiter quando i permessi al minuto sono finiti. Non sono loro a tenere basso il parallelismo.
+
+n CPython (riferimento a CPython), il Global Interpreter Lock (GIL) consente a un solo thread per volta di eseguire il bytecode Python all'interno dello stesso interprete. Durante le operazioni di I/O bloccante, come le richieste di rete, il GIL viene generalmente rilasciato, permettendo ad altri thread di proseguire l'esecuzione. Di conseguenza, l'impiego di un thread pool consente comunque di sovrapporre le latenze delle chiamate al provider remoto: il GIL non costituisce, in questo scenario, il principale fattore limitante dell'I/O di rete.
+
+Il suo impatto riguarda piuttosto le fasi di elaborazione eseguite in Python dopo il completamento delle richieste, come la deserializzazione delle risposte, l'aggiornamento dei contatori e la scrittura dei checkpoint. Queste operazioni, quando eseguite da thread appartenenti allo stesso interprete, sono soggette alla contesa per il GIL. Inoltre, l'accesso concorrente a strutture dati condivise, come bucket di aggregazione, o a file utilizzati per la persistenza dello stato, richiede un'opportuna strategia di sincronizzazione per garantire la correttezza dei dati e prevenire race condition.
+
+Un approccio basato su asyncio e coroutine permette di gestire la concorrenza I/O mediante un event loop, concentrando il cambio di contesto nei punti di sospensione espliciti (await). Questo modello riduce l'overhead associato alla creazione e alla gestione di numerosi thread e facilita il coordinamento delle richieste concorrenti. Un semaforo asincrono consente inoltre di imporre un limite al numero di operazioni contemporaneamente attive, senza dover allocare un thread dedicato per ciascuna richiesta. È tuttavia importante distinguere la concorrenza dalla parallelizzazione: le coroutine non eseguono automaticamente codice Python in parallelo e, nello stesso event loop, il codice sincrono che non restituisce il controllo può bloccare l'avanzamento delle altre attività.
+
+Il multiprocessing non riduce, di per sé, la latenza del provider remoto. Poiché ogni processo dispone di un interprete Python indipendente e di un proprio GIL, il multiprocessing consente di parallelizzare il lavoro CPU-bound. Nel caso in esame, tuttavia, il tempo di esecuzione è dominato dalle attese sulle chiamate remote, non da un carico computazionale locale significativo: la parallelizzazione del codice Python offre quindi benefici potenzialmente marginali rispetto alla gestione efficiente della concorrenza I/O.
+
+L'adozione di processi separati introduce inoltre costi operativi e architetturali aggiuntivi. Per coordinare un limite globale alla concorrenza e mantenere un checkpoint condiviso, occorre predisporre meccanismi di comunicazione e sincronizzazione interprocesso. Il trasferimento di richieste e risposte può richiedere serializzazione e deserializzazione, ad esempio tramite pickle, oltre all'utilizzo di code, pipe o altri canali IPC (Inter-Process Communication). Questi costi aumentano la complessità del sistema senza eliminare il vincolo prestazionale dominante, rappresentato dalla latenza e dalla capacità di elaborazione del provider remoto.
+
+In questo contesto, un modello asincrono basato su asyncio, con concorrenza limitata e gestione centralizzata dello stato, costituisce generalmente una scelta architetturale più appropriata, purché le librerie utilizzate per le chiamate remote supportino l'I/O asincrono o siano integrate mediante opportuni meccanismi di esecuzione in background.
+
 ---
 
 ## Struttura del Progetto
