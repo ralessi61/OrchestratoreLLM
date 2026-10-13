@@ -19,7 +19,9 @@ if __package__ is None or __package__ == "":
 
 from .engine import LLMOrchestrator
 from .logging_config import configure_logging
-from .models import LLMRequest, LLMTaskType
+from pydantic import ValidationError
+
+from .models import LLMRequest, LLMTaskType, format_validation_errors, parse_request_batch
 from .providers.registry import create_default_registry
 from .rate_limiter import TokenBucketRateLimiter
 from .retry import RetryPolicy
@@ -29,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Configura gli argomenti della riga di comando."""
     parser = argparse.ArgumentParser(
         prog="orchestratore-llm",
-        description="Esecuzione concorrente e resiliente di lotti di chiamate LLM",
+        description="Esecuzione concorrente e resiliente di batch di chiamate LLM",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -61,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-p",
         type=str,
         default=None,
-        help="Nome del provider registrato da utilizzare (default: 'ammollo', opzioni: 'ammollo', 'grocky', 'gwen')",
+        help="Provider registrato (default: ammollo, veloce; gwen lento con timeout; grocky con quota di 4/s)",
     )
     sim_parser.add_argument(
         "--output",
@@ -115,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_simulate(args: argparse.Namespace) -> int:
-    """Genera ed esegue il lotto notturno di test con 3 chiamate per documento."""
+    """Genera ed esegue il batch notturno di test con 3 chiamate per documento."""
     level = logging.DEBUG if getattr(args, "verbose", False) else logging.INFO
     configure_logging(level=level, json_mode=args.json_log)
 
@@ -209,14 +211,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Errore: il file di input '{input_path}' non esiste.", file=sys.stderr)
         return 1
 
-    with open(input_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if not isinstance(data, list):
-        print("Errore: il file JSON deve contenere una lista di oggetti richiesta.", file=sys.stderr)
+    try:
+        with open(input_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as exc:
+        print(
+            f"Errore: il file non è JSON valido ({exc.msg}, riga {exc.lineno}).",
+            file=sys.stderr,
+        )
         return 1
 
-    requests = [LLMRequest.from_dict(item) for item in data]
+    try:
+        requests = parse_request_batch(data)
+    except ValueError as exc:
+        print(f"Errore: {exc}", file=sys.stderr)
+        return 1
+    except ValidationError as exc:
+        print("Errore: il file di richieste non è valido.", file=sys.stderr)
+        print(format_validation_errors(exc), file=sys.stderr)
+        return 1
     orchestrator = LLMOrchestrator(max_concurrency=args.concurrency)
     result = orchestrator.run_batch(requests)
     result.save_json(args.output)

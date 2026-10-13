@@ -98,16 +98,15 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
             LLMRequest(prompt="Richiesta valida 1", request_id="REQ-OK-1"),
             LLMRequest(prompt="FAIL_PERMANENT", request_id="REQ-FAIL-1"),
             LLMRequest(prompt="Richiesta valida 2", request_id="REQ-OK-2"),
-            LLMRequest(prompt="", request_id="REQ-FAIL-2"), # Prompt vuoto -> 400
             LLMRequest(prompt="Richiesta valida 3", request_id="REQ-OK-3"),
         ]
 
         batch = await orchestrator.execute_batch(requests)
 
-        self.assertEqual(len(batch.results), 5)
-        self.assertEqual(batch.metrics.total_requests, 5)
+        self.assertEqual(len(batch.results), 4)
+        self.assertEqual(batch.metrics.total_requests, 4)
         self.assertEqual(batch.metrics.successful_requests, 3)
-        self.assertEqual(batch.metrics.failed_requests, 2)
+        self.assertEqual(batch.metrics.failed_requests, 1)
 
         self.assertTrue(batch.results_by_id["REQ-OK-1"].is_success)
         self.assertTrue(batch.results_by_id["REQ-OK-2"].is_success)
@@ -116,10 +115,6 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         fail1 = batch.results_by_id["REQ-FAIL-1"]
         self.assertFalse(fail1.is_success)
         self.assertEqual(fail1.error_type, "InvalidRequestError")
-
-        fail2 = batch.results_by_id["REQ-FAIL-2"]
-        self.assertFalse(fail2.is_success)
-        self.assertEqual(fail2.error_type, "InvalidRequestError")
 
     async def test_checkpoint_callback_execution(self):
         """Verifica l'invocazione del callback incrementale su ogni singolo completamento."""

@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Tuple
 from ..exceptions import (
     AuthenticationError,
     InvalidRequestError,
+    NetworkTimeoutError,
     RateLimitError,
     ServerTemporarilyUnavailableError,
 )
@@ -37,7 +38,11 @@ class SimulatedLLMProvider(BaseLLMProvider):
         permanent_error_probability: float = 0.0,
         simulated_retry_after: Optional[float] = None,
         fail_first_n_attempts: Dict[str, int] | None = None,
+        timeout_after: Optional[float] = None,
+        max_requests_per_window: Optional[int] = None,
+        rate_window_seconds: float = 1.0,
     ) -> None:
+        """Nome, modello, latenza e le probabilità con cui la chiamata può fallire."""
         self._name = name
         self._model = model
         self.latency_range = latency_range
@@ -46,27 +51,36 @@ class SimulatedLLMProvider(BaseLLMProvider):
         self.permanent_error_probability = permanent_error_probability
         self.simulated_retry_after = simulated_retry_after
         self.fail_first_n_attempts = fail_first_n_attempts or {}
+        self.timeout_after = timeout_after
+        self.max_requests_per_window = max_requests_per_window
+        self.rate_window_seconds = rate_window_seconds
         self._request_attempts: Dict[str, int] = {}
+        self._call_times: list[float] = []
         self._attempts_lock = threading.Lock()
+        self._rate_lock = threading.Lock()
 
     @property
     def name(self) -> str:
+        """Nome con cui il provider è registrato."""
         return self._name
 
     @property
     def model(self) -> str:
+        """Modello di default, usato se la richiesta non ne indica uno."""
         return self._model
 
     def estimate_tokens(self, text: str) -> int:
-        """Stima pressapoco token (~4 caratteri per token in media)."""
+        """Stima i token: circa 4 caratteri per token."""
         if not text:
             return 0
         return max(1, len(text) // 4)
 
     async def check_health(self) -> bool:
+        """Il simulatore non ha un endpoint: risulta sempre raggiungibile."""
         return True
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        """Risposta simulata, oppure timeout, 429 di quota o un errore configurato."""
         start_time = time.monotonic()
 
         # Tracciamento dei tentativi per specifica richiesta (per test di recovery controllato)
@@ -75,9 +89,19 @@ class SimulatedLLMProvider(BaseLLMProvider):
             current_attempt = self._request_attempts.get(req_id, 0) + 1
             self._request_attempts[req_id] = current_attempt
 
-        # Simulazione latenza di rete e inferenza
+        self._consume_rate_slot()
+
+        # Simulazione latenza di rete e inferenza.
+        # Se il tempo estratto supera timeout_after, la chiamata va in timeout.
         min_lat, max_lat = self.latency_range
         sleep_duration = random.uniform(min_lat, max_lat) if max_lat > min_lat else min_lat
+        if self.timeout_after is not None and sleep_duration > self.timeout_after:
+            if self.timeout_after > 0:
+                await asyncio.sleep(self.timeout_after)
+            raise NetworkTimeoutError(
+                f"Timeout simulato dopo {self.timeout_after:.2f}s su {self.name}",
+                provider=self.name,
+            )
         if sleep_duration > 0:
             await asyncio.sleep(sleep_duration)
 
@@ -149,6 +173,25 @@ class SimulatedLLMProvider(BaseLLMProvider):
             latency_seconds=latency,
             raw_response={"simulated": True, "attempt": current_attempt},
         )
+
+    def _consume_rate_slot(self) -> None:
+        """Conta le richieste accettate. Oltre la quota solleva RateLimitError, senza attendere la latenza."""
+        limit = self.max_requests_per_window
+        if limit is None:
+            return
+        now = time.monotonic()
+        window = self.rate_window_seconds
+        with self._rate_lock:
+            cutoff = now - window
+            self._call_times = [t for t in self._call_times if t > cutoff]
+            if len(self._call_times) >= limit:
+                wait = window - (now - self._call_times[0])
+                raise RateLimitError(
+                    f"Rate limit stretto su {self.name}: {limit} richieste ogni {window:.2f}s",
+                    provider=self.name,
+                    retry_after=max(0.0, wait),
+                )
+            self._call_times.append(now)
 
     def _generate_payload(self, request: LLMRequest) -> Tuple[str, Optional[Dict[str, Any]]]:
         """Produce payload specifici in base al tipo di task richiesto."""

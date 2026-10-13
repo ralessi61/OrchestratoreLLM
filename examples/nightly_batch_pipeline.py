@@ -1,7 +1,7 @@
-"""Pipeline di produzione notturna per l'elaborazione di lotti di documenti.
+"""Pipeline di produzione notturna per l'elaborazione di batch di documenti.
 
 Risolve lo scenario del cliente:
-- Riceve un lotto massivo di documenti;
+- Riceve un batch di documenti di grandi dimensioni;
 - Esegue in concorrenza controllata le 3 chiamate per documento:
   1. Classificazione
   2. Riassunto
@@ -58,7 +58,7 @@ class CheckpointManager:
 
 
 def build_document_batch(num_documents: int, provider_name: str) -> List[LLMRequest]:
-    """Costruisce le richieste per il lotto notturno (3 chiamate LLM per documento)."""
+    """Costruisce le richieste per il batch notturno (3 chiamate LLM per documento)."""
     requests: List[LLMRequest] = []
 
     for i in range(1, num_documents + 1):
@@ -161,7 +161,7 @@ async def run_nightly_batch(
     logger = configure_logging(level=logging.INFO, json_mode=False, log_file=log_file)
     logger.info("Avvio Pipeline Notturna Elaborazione Documenti")
 
-    # grocky è il provider del registry che inietta 429; ammollo è quello stabile.
+    # grocky ha una quota di 4 chiamate al secondo e risponde 429; ammollo è quello stabile.
     registry = create_default_registry()
     provider = registry.get("grocky" if simulate_rate_limits else "ammollo")
     provider_name = provider.name
@@ -186,10 +186,10 @@ async def run_nightly_batch(
         checkpoint_callback=checkpoint_mgr.save_checkpoint,
     )
 
-    # Creazione del lotto (40 documenti x 3 chiamate = 120 chiamate LLM)
+    # Creazione del batch (40 documenti x 3 chiamate = 120 chiamate LLM)
     requests = build_document_batch(num_documents=num_documents, provider_name=provider_name)
     logger.info(
-        f"Lotto preparato: {num_documents} documenti, {len(requests)} chiamate LLM totali. "
+        f"batch preparato: {num_documents} documenti, {len(requests)} chiamate LLM totali. "
         f"Concorrenza: {max_concurrency}, Rate Limiter: {rpm_limit} RPM."
     )
 
@@ -211,7 +211,7 @@ async def run_nightly_batch(
     print("\n" + "=" * 75)
     print("           REPORT FINALE BATCH NOTTURNO")
     print("=" * 75)
-    print(f" Documenti nel lotto        : {num_documents}")
+    print(f" Documenti nel batch        : {num_documents}")
     print(f" Documenti 100% completati  : {fully_completed_docs}/{num_documents} ({fully_completed_docs/num_documents*100:.1f}%)")
     print(f" Chiamate LLM inviate       : {m.total_requests}")
     print(f" Chiamate riuscite          : {m.successful_requests} ({m.successful_requests/m.total_requests*100:.1f}%)")

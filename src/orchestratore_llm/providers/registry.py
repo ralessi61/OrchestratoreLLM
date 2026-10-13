@@ -14,6 +14,7 @@ class ProviderRegistry:
     """
 
     def __init__(self) -> None:
+        """Registro vuoto, ancora senza provider di default."""
         self._providers: Dict[str, BaseLLMProvider] = {}
         self._default_provider_name: Optional[str] = None
 
@@ -52,7 +53,7 @@ def create_default_registry() -> ProviderRegistry:
     """Costruisce un registry predefinito con provider simulati."""
     registry = ProviderRegistry()
 
-    # Provider predefinito standard
+    # Veloce e affidabile: è anche il default della CLI.
     default_sim = SimulatedLLMProvider(
         name="ammollo",
         model="cerri-gpt-4k-bio",
@@ -60,22 +61,23 @@ def create_default_registry() -> ProviderRegistry:
     )
     registry.register(default_sim, set_as_default=True)
 
-    # Provider secondario ad alta velocità (es. per compiti leggeri)
-    fast_sim = SimulatedLLMProvider(
+    # Lento, latenza variabile. Se il valore estratto supera timeout_after, la chiamata va in timeout.
+    slow_sim = SimulatedLLMProvider(
         name="gwen",
         model="parker-gpt-4o-spider",
-        latency_range=(0.005, 0.02),
+        latency_range=(0.4, 1.4),
+        timeout_after=1.0,
     )
-    registry.register(fast_sim)
+    registry.register(slow_sim)
 
-    # Provider per simulazione resilienza (genera 429 intermittenti)
-    flaky_sim = SimulatedLLMProvider(
+    # Quota stretta: 4 chiamate ammesse per secondo, poi 429 con retry_after.
+    limited_sim = SimulatedLLMProvider(
         name="grocky",
         model="drago-27b-tispiezzo-in2",
         latency_range=(0.01, 0.03),
-        rate_limit_probability=0.25, # 25% random 429 errors
-        simulated_retry_after=0.2,
+        max_requests_per_window=4,
+        rate_window_seconds=1.0,
     )
-    registry.register(flaky_sim)
+    registry.register(limited_sim)
 
     return registry

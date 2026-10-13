@@ -8,6 +8,7 @@ packages = [{include = "orchestratore_llm", from = "src"}]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
+pydantic = ">=2,<3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.4.0"

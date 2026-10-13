@@ -63,7 +63,7 @@ async def execute_with_retry(
     
     Returns:
         Tupla composta dal valore restituito dall'operazione e dal numero
-        totale di tentativi effettuati (1 = riuscito al primo colpo).
+        totale di tentativi effettuati (1 = riuscito al primo tentativo).
         
     Raises:
         L'eccezione originale se i tentativi vengono esauriti o se l'errore è permanente.

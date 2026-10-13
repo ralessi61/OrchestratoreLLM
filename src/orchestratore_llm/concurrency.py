@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Awaitable, Callable, List, Sequence, Tuple, TypeVar, Union
 
 T = TypeVar("T")
@@ -14,36 +14,41 @@ OnResult = Callable[[int, T], Union[None, Awaitable[None]]]
 
 
 async def _emit(on_result: OnResult, index: int, value: T) -> None:
+    """Chiama on_result e, se restituisce una coroutine, la attende."""
     out = on_result(index, value)
     if asyncio.iscoroutine(out):
         await out
 
 
 class ConcurrencyStrategy(ABC):
-    """Come far girare le chiamate del lotto. Il risultato resta nell'ordine di partenza,
-    ma chi riceve on_result lo vede quando quella chiamata è finita, non a lotto chiuso.
+    """Come far girare le chiamate del batch. Il risultato resta nell'ordine di partenza,
+    ma chi riceve on_result lo vede quando quella chiamata è finita, non a batch chiuso.
     """
 
     def __init__(self, max_concurrency: int) -> None:
+        """Limite di chiamate concorrenti. Deve essere maggiore di zero."""
         if max_concurrency <= 0:
             raise ValueError("max_concurrency deve essere strettamente positivo")
         self.max_concurrency = max_concurrency
 
     @abstractmethod
     async def run(self, jobs: Sequence[Job], on_result: OnResult) -> None:
-        pass
+        """Esegue i job e chiama on_result appena ciascuno termina."""
+        raise NotImplementedError
 
 
 class AsyncioStrategy(ConcurrencyStrategy):
-    """Coroutine sul loop corrente. Il semaforo è il tetto di chiamate in volo."""
+    """Coroutine sul loop corrente. Il semaforo limita le chiamate concorrenti."""
 
     async def run(self, jobs: Sequence[Job], on_result: OnResult) -> None:
+        """Semaforo di max_concurrency slot. I risultati arrivano in ordine di completamento."""
         if not jobs:
             return
 
         semaphore = asyncio.Semaphore(self.max_concurrency)
 
         async def _one(index: int, job: Job) -> Tuple[int, T]:
+            """Acquisisce il semaforo, poi esegue il job."""
             async with semaphore:
                 return index, await job()
 
@@ -66,6 +71,7 @@ class ThreadingStrategy(ConcurrencyStrategy):
     """
 
     async def run(self, jobs: Sequence[Job], on_result: OnResult) -> None:
+        """Pool di max_concurrency thread, un event loop per thread."""
         if not jobs:
             return
 
@@ -77,12 +83,14 @@ class ThreadingStrategy(ConcurrencyStrategy):
         guard = threading.Lock()
         inflight: List[Tuple[asyncio.AbstractEventLoop, asyncio.Task]] = []
 
-        def _run(index: int, job: Job):
+        def _run(index: int, job: Job) -> Tuple[int, T]:
+            """Apre un event loop nel thread e ci esegue il job."""
             inner = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(inner)
 
-                async def _body():
+                async def _body() -> T:
+                    """Tiene il task tra quelli in esecuzione e lo rimuove al termine."""
                     task = asyncio.current_task()
                     with guard:
                         if stop.is_set():
@@ -129,6 +137,7 @@ class ThreadingStrategy(ConcurrencyStrategy):
 
 
 def _swallow(fut: asyncio.Future) -> None:
+    """Legge l'eccezione di un future già concluso, così non resta un warning."""
     if fut.cancelled():
         return
     try:
@@ -138,13 +147,20 @@ def _swallow(fut: asyncio.Future) -> None:
 
 
 async def _drop_tasks(tasks: Sequence[asyncio.Task]) -> None:
+    """Annulla i task ancora aperti e attende che si chiudano."""
     for task in tasks:
         if not task.done():
             task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def _stop_threads(stop, guard, inflight, futures) -> None:
+def _stop_threads(
+    stop: threading.Event,
+    guard: threading.Lock,
+    inflight: List[Tuple[asyncio.AbstractEventLoop, asyncio.Task]],
+    futures: Sequence[Future],
+) -> None:
+    """Segna lo stop, cancella i task nei loop dei thread e i future del pool."""
     with guard:
         stop.set()
         snapshot = list(inflight)

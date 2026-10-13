@@ -9,7 +9,8 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
 from .concurrency import AsyncioStrategy, ConcurrencyStrategy
-from .exceptions import OrchestratorError, PermanentError, TransientError
+from .decorators import logged, retry, timing, wrapped_attr
+from .exceptions import OrchestratorError, PermanentError, ResponseMismatchError, TransientError
 from .models import (
     BatchMetrics,
     BatchResult,
@@ -21,7 +22,7 @@ from .models import (
 from .providers.base import BaseLLMProvider
 from .providers.registry import ProviderRegistry, create_default_registry
 from .rate_limiter import BaseRateLimiter
-from .retry import RetryPolicy, execute_with_retry
+from .retry import RetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,8 @@ logger = logging.getLogger(__name__)
 class LLMOrchestrator:
     """Orchestratore di chiamate a modelli linguistici con tolleranza d'errore.
     
-    Mette un tetto alle chiamate in volo, impone limiti di frequenza,
-    applica retry adattivo ed elabora lotti massivi preservando l'ordine
+    Limita le chiamate concorrenti, impone limiti di frequenza,
+    applica retry adattivo ed elabora batch di grandi dimensioni preservando l'ordine
     e la corrispondenza con le richieste d'origine.
     """
 
@@ -53,7 +54,7 @@ class LLMOrchestrator:
             checkpoint_callback: Funzione invocata non appena un task termina,
                                 utile per persistere su disco/database i singoli avanzamenti.
             strategy: AsyncioStrategy o ThreadingStrategy. Se omessa, asyncio
-                      con il tetto max_concurrency.
+                      con quel max_concurrency.
         """
         if max_concurrency <= 0:
             raise ValueError("max_concurrency deve essere strettamente positivo")
@@ -91,15 +92,9 @@ class LLMOrchestrator:
                 total_duration_seconds=duration,
             )
 
-        # 2. Definizione dell'operazione atomica protetta da rate limit
-        async def _call_provider() -> LLMResponse:
-            if self.rate_limiter is not None:
-                # Applica throttling preventivo
-                await self.rate_limiter.acquire(tokens=1)
-            return await provider.complete(request)
-
         # 3. Callback interna per tracciamento dei retry
         def _on_retry(attempt_num: int, exc: Exception, delay_sec: float) -> None:
+            """Conta il tentativo ed emette un warning prima del backoff."""
             nonlocal total_attempts
             # attempt_num conta i retry già avviati; includi anche il primo tentativo.
             total_attempts = attempt_num + 1
@@ -116,14 +111,27 @@ class LLMOrchestrator:
                 },
             )
 
-        # 4. Esecuzione con policy di retry
+        # 2. e 4. Rate limit, retry, durata e log sono decoratori sulla stessa coroutine.
+        #    Il decoratore più interno è @retry: @timing misura anche i backoff, @logged vede un solo esito.
+        @logged
+        @timing
+        @retry(self.retry_policy, on_retry=_on_retry)
+        async def _call_provider() -> LLMResponse:
+            """Chiama il provider dopo aver preso il permesso dal rate limiter."""
+            if self.rate_limiter is not None:
+                await self.rate_limiter.acquire(tokens=1)
+            response = await provider.complete(request)
+            if response.request_id != request.request_id:
+                raise ResponseMismatchError(
+                    f"response.request_id vale {response.request_id!r}, "
+                    f"la richiesta era {request.request_id!r}",
+                    provider=provider.name,
+                )
+            return response
+
         try:
-            response, attempts_count = await execute_with_retry(
-                operation=_call_provider,
-                policy=self.retry_policy,
-                on_retry=_on_retry,
-            )
-            total_attempts = attempts_count
+            response = await _call_provider()
+            total_attempts = wrapped_attr(_call_provider, "last_attempts", total_attempts)
             duration = time.monotonic() - start_time
 
             logger.info(
@@ -149,6 +157,7 @@ class LLMOrchestrator:
 
         except Exception as exc:
             duration = time.monotonic() - start_time
+            total_attempts = wrapped_attr(_call_provider, "last_attempts", total_attempts)
             is_trans = isinstance(exc, TransientError)
             err_type = exc.__class__.__name__
 
@@ -210,6 +219,7 @@ class LLMOrchestrator:
         ordered_results: List[Optional[TaskExecutionResult]] = [None] * total_count
 
         def _store(index: int, result: TaskExecutionResult) -> None:
+            """Scrive l'esito all'indice originale della richiesta."""
             ordered_results[index] = result
 
         jobs = [(lambda req=req: self.execute_request(req)) for req in requests]

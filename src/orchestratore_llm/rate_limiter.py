@@ -55,7 +55,7 @@ class TokenBucketRateLimiter(BaseRateLimiter):
         """Attende fino a quando non sono disponibili i token richiesti.
         
         Returns:
-            Tempo totale speso in sleep asincrono.
+            Tempo totale trascorso in attesa asincrona.
         """
         if tokens > self.capacity:
             raise ValueError(f"Richiesti {tokens} token su una capacità massima di {self.capacity}")
@@ -89,6 +89,7 @@ class SlidingWindowRateLimiter(BaseRateLimiter):
     """Rate limiter a finestra mobile per garantire una distribuzione uniforme dei task."""
 
     def __init__(self, max_requests: int, window_seconds: float = 60.0) -> None:
+        """Al più max_requests richieste nella finestra di window_seconds."""
         if max_requests <= 0:
             raise ValueError("max_requests deve essere positivo")
         self.max_requests = max_requests
@@ -97,6 +98,7 @@ class SlidingWindowRateLimiter(BaseRateLimiter):
         self._lock = threading.Lock()
 
     async def acquire(self, tokens: int = 1) -> float:
+        """Attende uno slot libero nella finestra, poi registra la richiesta."""
         total_waited = 0.0
 
         while True:

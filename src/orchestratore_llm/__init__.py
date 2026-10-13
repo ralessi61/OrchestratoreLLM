@@ -6,6 +6,7 @@ e tracciamento metriche.
 """
 
 from .concurrency import AsyncioStrategy, ThreadingStrategy
+from .decorators import logged, retry, timing
 from .engine import LLMOrchestrator
 from .exceptions import (
     AuthenticationError,
@@ -18,6 +19,7 @@ from .exceptions import (
     PermanentError,
     ProviderNotFoundError,
     RateLimitError,
+    ResponseMismatchError,
     ServerTemporarilyUnavailableError,
     TransientError,
 )
@@ -67,6 +69,7 @@ __all__ = [
     "ModelNotFoundError",
     "ContextWindowExceededError",
     "ProviderNotFoundError",
+    "ResponseMismatchError",
     # Rate Limiting
     "BaseRateLimiter",
     "TokenBucketRateLimiter",
@@ -74,6 +77,9 @@ __all__ = [
     # Retry
     "RetryPolicy",
     "execute_with_retry",
+    "retry",
+    "timing",
+    "logged",
     # Provider
     "BaseLLMProvider",
     "SimulatedLLMProvider",

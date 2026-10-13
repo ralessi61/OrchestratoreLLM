@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ class StructuredJsonFormatter(logging.Formatter):
     """Formatter che serializza ogni record di log in una stringa JSON compatta."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Un record, una riga JSON."""
         log_payload: Dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
@@ -50,15 +52,16 @@ class ColoredConsoleFormatter(logging.Formatter):
     """Formatter leggibile con codici ANSI per sviluppo e monitoraggio a console."""
 
     COLORS = {
-        "DEBUG": "\033[36m",     # Ciano
+        "DEBUG": "\033[36m",     # Azzurro
         "INFO": "\033[32m",      # Verde
         "WARNING": "\033[33m",   # Giallo
         "ERROR": "\033[31m",     # Rosso
-        "CRITICAL": "\033[1;31m" # Rosso grassetto
+        "CRITICAL": "\033[1;31m" # Rosso 
     }
     RESET = "\033[0m"
 
     def format(self, record: logging.LogRecord) -> str:
+        """Riga da terminale, con il livello colorato e i campi di contesto."""
         time_str = datetime.fromtimestamp(record.created).strftime("%H:%M:%S.%f")[:-3]
         color = self.COLORS.get(record.levelname, self.RESET)
 
@@ -84,8 +87,14 @@ def configure_logging(
     json_mode: bool = False,
     log_file: Optional[str | Path] = None,
     logger_name: str = "orchestratore_llm",
+    max_bytes: int = 1_048_576,
+    backup_count: int = 5,
 ) -> logging.Logger:
-    """Inizializza e configura la gerarchia di logging per la libreria."""
+    """Inizializza e configura la gerarchia di logging per la libreria.
+
+    Se c'è un file, a 1 MiB viene rinominato in .1, .2, ... e ne restano al più
+    backup_count copie. max_bytes a 0 disattiva la rotazione.
+    """
     logger = logging.getLogger(logger_name)
     logger.setLevel(level)
     logger.handlers.clear()
@@ -100,11 +109,16 @@ def configure_logging(
         console_handler.setFormatter(ColoredConsoleFormatter())
     logger.addHandler(console_handler)
 
-    # Eventuale File Handler rotante o continuo
+    # Il file è sempre JSON. Oltre max_bytes il corrente diventa .1 e se ne apre uno nuovo.
     if log_file:
         file_path = Path(log_file)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(str(file_path), encoding="utf-8")
+        file_handler = logging.handlers.RotatingFileHandler(
+            str(file_path),
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
         file_handler.setLevel(level)
         file_handler.setFormatter(StructuredJsonFormatter())
         logger.addHandler(file_handler)

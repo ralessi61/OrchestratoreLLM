@@ -11,6 +11,7 @@ class OrchestratorError(Exception):
     """Classe base per tutte le eccezioni sollevate dall'orchestratore."""
 
     def __init__(self, message: str, provider: Optional[str] = None) -> None:
+        """Messaggio e, se c'è, il nome del provider che ha fallito."""
         super().__init__(message)
         self.message = message
         self.provider = provider
@@ -61,6 +62,11 @@ class ProviderNotFoundError(PermanentError):
     pass
 
 
+class ResponseMismatchError(PermanentError):
+    """La risposta porta il request_id di un'altra chiamata."""
+    pass
+
+
 class TransientError(OrchestratorError):
     """Errore transitorio recuperabile mediante nuova iterazione con backoff.
     
@@ -79,6 +85,7 @@ class RateLimitError(TransientError):
         provider: Optional[str] = None,
         retry_after: Optional[float] = None,
     ) -> None:
+        """Come OrchestratorError, con retry_after in secondi."""
         super().__init__(message, provider=provider)
         self.retry_after = retry_after
 

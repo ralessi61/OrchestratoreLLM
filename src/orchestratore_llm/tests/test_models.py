@@ -1,6 +1,8 @@
 """Test unitari per i modelli di dati."""
 
-import json
+import pytest
+from pydantic import ValidationError
+
 from orchestratore_llm.models import (
     BatchMetrics,
     BatchResult,
@@ -10,6 +12,8 @@ from orchestratore_llm.models import (
     LLMTaskType,
     TaskExecutionResult,
     TokenUsage,
+    format_validation_errors,
+    parse_request_batch,
 )
 
 
@@ -53,7 +57,7 @@ def test_batch_result_filtering_and_document_grouping():
             content="ok1",
             provider="test",
             model="m1",
-            usage=TokenUsage(10, 10, 20),
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
         ),
     )
     res2 = TaskExecutionResult(
@@ -71,7 +75,7 @@ def test_batch_result_filtering_and_document_grouping():
             content="ok3",
             provider="test",
             model="m1",
-            usage=TokenUsage(5, 5, 10),
+            usage=TokenUsage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
         ),
     )
 
@@ -84,3 +88,52 @@ def test_batch_result_filtering_and_document_grouping():
     doc1_results = batch.get_by_document("DOC-1")
     assert len(doc1_results) == 2
     assert batch.results_by_id[req1.request_id] == res1
+
+
+def test_blank_prompt_names_the_field() -> None:
+    with pytest.raises(ValidationError) as caught:
+        LLMRequest(prompt="   ")
+    message = format_validation_errors(caught.value)
+    assert "prompt:" in message
+    assert "vuoto" in message
+
+
+def test_temperature_out_of_range() -> None:
+    with pytest.raises(ValidationError) as caught:
+        LLMRequest(prompt="Classifica", parameters={"temperature": 4})
+    message = format_validation_errors(caught.value)
+    assert "parameters:" in message
+    assert "temperature" in message
+    assert "tra 0 e 2" in message
+
+
+def test_total_tokens_must_match_sum() -> None:
+    with pytest.raises(ValidationError) as caught:
+        TokenUsage(prompt_tokens=10, completion_tokens=10, total_tokens=5)
+    message = format_validation_errors(caught.value)
+    assert "total_tokens" in message
+    assert "fa 20" in message
+
+
+def test_success_requires_response() -> None:
+    req = LLMRequest(prompt="p")
+    with pytest.raises(ValidationError) as caught:
+        TaskExecutionResult(request=req, status=ExecutionStatus.SUCCESS)
+    message = format_validation_errors(caught.value)
+    assert "response:" in message
+    assert "success" in message
+
+
+def test_request_file_must_be_a_list() -> None:
+    with pytest.raises(ValueError) as caught:
+        parse_request_batch({"prompt": "x"})
+    assert "file:" in str(caught.value)
+    assert "lista" in str(caught.value)
+
+
+def test_request_file_names_the_row() -> None:
+    with pytest.raises(ValidationError) as caught:
+        parse_request_batch([{"prompt": "ok"}, {"task_type": "summary"}])
+    message = format_validation_errors(caught.value)
+    assert "richiesta[1].prompt:" in message
+    assert "obbligatorio" in message
